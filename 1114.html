@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스킬 회피 게임</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            font-family: 'Arial', sans-serif;
+            cursor: crosshair;
+        }
+
+        #gameCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background: rgba(0, 0, 0, 0.1);
+        }
+
+        #gameUI {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            display: none;
+            z-index: 20;
+        }
+
+        #gameOver h2 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.7);
+        }
+
+        #restartBtn {
+            padding: 15px 30px;
+            font-size: 24px;
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        #restartBtn:hover {
+            background: #ff5252;
+            transform: scale(1.1);
+        }
+
+        .skill {
+            position: absolute;
+            border-radius: 50%;
+            box-shadow: 0 0 20px currentColor;
+            transition: none;
+        }
+
+        .player {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #ffd700, #ffed4e);
+            box-shadow: 0 0 30px #ffd700;
+            transition: none;
+            z-index: 5;
+        }
+
+        .powerup {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #00ff00, #00aa00);
+            box-shadow: 0 0 20px #00ff00;
+            animation: pulse 0.5s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.2); }
+        }
+
+        .particle {
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameUI">
+        <div>점수: <span id="score">0</span></div>
+        <div>하이스코어: <span id="highScore">0</span></div>
+        <div>콤보: <span id="combo">0</span>x</div>
+    </div>
+
+    <div id="gameOver">
+        <h2>게임 오버!</h2>
+        <p style="font-size: 24px; margin-bottom: 20px;">최종 점수: <span id="finalScore">0</span></p>
+        <button id="restartBtn" onclick="restartGame()">다시 시작</button>
+    </div>
+
+    <div id="instructions">
+        <p>🖱️ 우클릭으로 이동 | 💎 파워업 획득 | ⚡ 스킬 피하기</p>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // 게임 상태
+        const game = {
+            score: 0,
+            highScore: localStorage.getItem('highScore') || 0,
+            combo: 0,
+            isRunning: true,
+            difficulty: 1,
+            lastSkillTime: 0,
+            lastPowerUpTime: 0
+        };
+
+        // 플레이어
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            targetX: canvas.width / 2,
+            targetY: canvas.height / 2,
+            speed: 0.15,
+            size: 20,
+            invincible: false,
+            invincibleTime: 0
+        };
+
+        // 스킬, 파워업, 파티클 배열
+        const skills = [];
+        const powerUps = [];
+        const particles = [];
+
+        // 스킬 클래스
+        class Skill {
+            constructor(x, y, type) {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.speed = 2 + Math.random() * 3 * game.difficulty;
+                this.size = 20 + Math.random() * 15;
+                this.angle = Math.atan2(player.y - y, player.x - x);
+                
+                // 스킬 타입별 설정
+                switch(type) {
+                    case 'fire':
+                        this.color = '#ff4757';
+                        this.damage = 1;
+                        break;
+                    case 'ice':
+                        this.color = '#3742fa';
+                        this.damage = 1;
+                        this.slowEffect = true;
+                        break;
+                    case 'lightning':
+                        this.color = '#ffa502';
+                        this.damage = 2;
+                        this.speed *= 1.5;
+                        break;
+                }
+            }
+
+            update() {
+                // 플레이어 방향으로 이동
+                const angle = Math.atan2(player.y - this.y, player.x - this.x);
+                this.x += Math.cos(angle) * this.speed;
+                this.y += Math.sin(angle) * this.speed;
+
+                // 화면 밖으로 나가면 제거
+                if (this.x < -100 || this.x > canvas.width + 100 || 
+                    this.y < -100 || this.y > canvas.height + 100) {
+                    return false;
+                }
+                return true;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.type === 'ice' ? 0.8 : 1;
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 스킬 내부 디자인
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.beginPath();
+                ctx.arc(this.x - this.size/3, this.y - this.size/3, this.size/3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 파워업 클래스
+        class PowerUp {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = 15;
+                this.type = Math.random() < 0.5 ? 'shield' : 'speed';
+                this.collected = false;
+            }
+
+            update() {
+                // 회전 효과
+                this.rotation = (this.rotation || 0) + 0.05;
+                
+                // 플레이어와 충돌 체크
+                const dist = Math.hypot(player.x - this.x, player.y - this.y);
+                if (dist < this.size + player.size) {
+                    this.collected = true;
+                    if (this.type === 'shield') {
+                        player.invincible = true;
+                        player.invincibleTime = 3000; // 3초 무적
+                    } else {
+                        player.speed = 0.3; // 3초간 속도 증가
+                        setTimeout(() => player.speed = 0.15, 3000);
+                    }
+                    createParticles(this.x, this.y, '#00ff00');
+                }
+                return !this.collected;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation || 0);
+                ctx.fillStyle = this.type === 'shield' ? '#00ff00' : '#00ffff';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = ctx.fillStyle;
+                ctx.fillRect(-this.size, -this.size, this.size * 2, this.size * 2);
+                ctx.restore();
+            }
+        }
+
+        // 파티클 생성 함수
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    size: Math.random() * 5 + 2,
+                    color: color,
+                    life: 1
+                });
+            }
+        }
+
+        // 마우스 우클릭 이벤트
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (game.isRunning) {
+                player.targetX = e.clientX;
+                player.targetY = e.clientY;
+            }
+        });
+
+        // 플레이어 업데이트
+        function updatePlayer() {
+            // 부드러운 이동
+            player.x += (player.targetX - player.x) * player.speed;
+            player.y += (player.targetY - player.y) * player.speed;
+
+            // 무적 시간 감소
+            if (player.invincibleTime > 0) {
+                player.invincibleTime -= 16;
+                if (player.invincibleTime <= 0) {
+                    player.invincible = false;
+                }
+            }
+        }
+
+        // 플레이어 그리기
+        function drawPlayer() {
+            ctx.save();
+            
+            // 무적 효과
+            if (player.invincible) {
+                ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.01) * 0.5;
+            }
+            
+            // 플레이어 그리기
+            ctx.fillStyle = '#ffd700';
+            ctx.shadowBlur = 30;
+            ctx.shadowColor = '#ffd700';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 얼굴 표현
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(player.x - 8, player.y - 5, 3, 0, Math.PI * 2);
+            ctx.arc(player.x + 8, player.y - 5, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 웃는 입
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, 10, 0.2 * Math.PI, 0.8 * Math.PI);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        // 파티클 업데이트 및 그리기
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                p.size *= 0.95;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+                
+                ctx.save();
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 충돌 체크
+        function checkCollisions() {
+            if (player.invincible) return;
+            
+            for (let skill of skills) {
+                const dist = Math.hypot(player.x - skill.x, player.y - skill.y);
+                if (dist < player.size + skill.size) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
+
+        // 게임 오버
+        function gameOver() {
+            game.isRunning = false;
+            document.getElementById('finalScore').textContent = game.score;
+            document.getElementById('gameOver').style.display = 'block';
+            
+            if (game.score > game.highScore) {
+                game.highScore = game.score;
+                localStorage.setItem('highScore', game.highScore);
+                document.getElementById('highScore').textContent = game.highScore;
+            }
+            
+            createParticles(player.x, player.y, '#ff0000');
+        }
+
+        // 게임 재시작
+        function restartGame() {
+            game.score = 0;
+            game.combo = 0;
+            game.difficulty = 1;
+            game.isRunning = true;
+            skills.length = 0;
+            powerUps.length = 0;
+            particles.length = 0;
+            
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+            player.targetX = player.x;
+            player.targetY = player.y;
+            player.invincible = false;
+            player.invincibleTime = 0;
+            
+            document.getElementById('gameOver').style.display = 'none';
+            updateUI();
+        }
+
+        // UI 업데이트
+        function updateUI() {
+            document.getElementById('score').textContent = game.score;
+            document.getElementById('highScore').textContent = game.highScore;
+            document.getElementById('combo').textContent = game.combo;
+        }
+
+        // 게임 루프
+        let lastTime = 0;
+        function gameLoop(currentTime) {
+            if (!lastTime) lastTime = currentTime;
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+
+            // 배경 그리기
+            ctx.fillStyle = 'rgba(30, 60, 114, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (game.isRunning) {
+                // 점수 증가
+                game.score += Math.floor(deltaTime / 10);
+                game.combo = Math.floor(game.score / 1000);
+                
+                // 난이도 증가
+                game.difficulty = 1 + game.score / 5000;
+
+                // 스킬 생성
+                if (currentTime - game.lastSkillTime > 1000 / game.difficulty) {
+                    const side = Math.floor(Math.random() * 4);
+                    let x, y;
+                    switch(side) {
+                        case 0: x = Math.random() * canvas.width; y = -50; break;
+                        case 1: x = canvas.width + 50; y = Math.random() * canvas.height; break;
+                        case 2: x = Math.random() * canvas.width; y = canvas.height + 50; break;
+                        case 3: x = -50; y = Math.random() * canvas.height; break;
+                    }
+                    const types = ['fire', 'ice', 'lightning'];
+                    skills.push(new Skill(x, y, types[Math.floor(Math.random() * types.length)]));
+                    game.lastSkillTime = currentTime;
+                }
+
+                // 파워업 생성
+                if (currentTime - game.lastPowerUpTime > 8000) {
+                    powerUps.push(new PowerUp(
+                        Math.random() * (canvas.width - 100) + 50,
+                        Math.random() * (canvas.height - 100) + 50
+                    ));
+                    game.lastPowerUpTime = currentTime;
+                }
+
+                // 업데이트
+                updatePlayer();
+                
+                // 스킬 업데이트
+                for (let i = skills.length - 1; i >= 0; i--) {
+                    if (!skills[i].update()) {
+                        skills.splice(i, 1);
+                    }
+                }
+                
+                // 파워업 업데이트
+                for (let i = powerUps.length - 1; i >= 0; i--) {
+                    if (!powerUps[i].update()) {
+                        powerUps.splice(i, 1);
+                    }
+                }
+
+                // 충돌 체크
+                checkCollisions();
+            }
+
+            // 그리기
+            drawPlayer();
+            skills.forEach(skill => skill.draw());
+            powerUps.forEach(powerup => powerup.draw());
+            updateParticles();
+
+            // UI 업데이트
+            updateUI();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 창 크기 조정
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // 게임 시작
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
